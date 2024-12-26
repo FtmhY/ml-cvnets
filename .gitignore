@@ -33,4 +33,4 @@ venv/
 trash
 
 data/imagenet/*
-data/*
+data/
