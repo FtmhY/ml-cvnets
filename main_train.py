@@ -29,6 +29,20 @@ from utils.checkpoint_utils import load_checkpoint, load_model_state
 from utils.common_utils import create_directories, device_setup
 from utils.ddp_utils import distributed_init, is_master
 
+from codecarbon import EmissionsTracker
+from datetime import datetime
+
+# Get the current date in YYYYMMDD format
+current_date = datetime.now().strftime("%Y%m%d")
+
+# Specify the custom filename
+custom_file_name = f"emissions_{current_date}.csv"
+
+# Initialize the tracker with the custom filename
+tracker = EmissionsTracker(output_dir="./results/CodeCarbon", output_file=custom_file_name, measure_power_secs=15)
+
+# Start tracking
+tracker.start()
 
 @errors.record
 def main(opts: argparse.Namespace, **kwargs) -> None:
@@ -173,6 +187,8 @@ def main(opts: argparse.Namespace, **kwargs) -> None:
 
     training_engine.run(train_sampler=train_sampler)
 
+# Stop tracking
+tracker.stop()
 
 def distributed_worker(i, main, opts, kwargs):
     setattr(opts, "dev.device_id", i)

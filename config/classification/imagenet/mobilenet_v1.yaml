@@ -6,14 +6,14 @@ common:
   mixed_precision: true
   channels_last: true
 dataset:
-  root_train: "/mnt/imagenet/training"
-  root_val: "/mnt/imagenet/validation"
+  root_train: "/home/ubuntu/ml-cvnets/data/imagenet/train"
+  root_val: "/home/ubuntu/ml-cvnets/data/imagenet/val"
   name: "imagenet"
   category: "classification"
-  train_batch_size0: 128 # effective batch size is 512 (128 * 4 GPUs)
+  train_batch_size0: 512 # effective batch size is 512 (128 * 4 GPUs)
   val_batch_size0: 100
   eval_batch_size0: 100
-  workers: 8
+  workers: 4
   persistent_workers: true
   pin_memory: true
 image_augmentation:
@@ -56,7 +56,7 @@ optim:
 scheduler:
   name: "cosine"
   is_iteration_based: false
-  max_epochs: 300
+  max_epochs: 2
   warmup_iterations: 7500
   warmup_init_lr: 0.05
   cosine:

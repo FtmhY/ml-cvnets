@@ -1,0 +1,70 @@
+taskname: '+ MobileNetv1-1.0'
+common:
+  run_label: "train_cifar10"
+  log_freq: 50
+  auto_resume: true
+  mixed_precision: true
+  channels_last: true
+
+dataset:
+  root_train: "./data/cifar10/train" # Path for CIFAR-10 training data
+  root_val: "./data/cifar10/val"    # Path for CIFAR-10 validation data
+  name: "cifar10"
+  category: "classification"
+  train_batch_size0: 32            # Adjusted for CIFAR-10
+  val_batch_size0: 32              # Adjusted for CIFAR-10
+  eval_batch_size0: 32             # Adjusted for CIFAR-10
+  workers: 4
+  persistent_workers: true
+  pin_memory: true
+
+image_augmentation:
+  random_resized_crop:
+    enable: true
+    interpolation: "bilinear"
+  random_horizontal_flip:
+    enable: true
+  resize:
+    enable: true
+    size: 224 # Resize CIFAR-10 images to 224x224
+    interpolation: "bilinear"
+  center_crop:
+    enable: true
+    size: 224
+
+sampler:
+  name: "variable_batch_sampler"
+  vbs:
+    crop_size_width: 224
+    crop_size_height: 224
+    max_n_scales: 5
+    min_crop_size_width: 128
+    max_crop_size_width: 320
+    min_crop_size_height: 128
+    max_crop_size_height: 320
+    check_scale: 32
+
+loss:
+  category: "classification"
+  classification:
+    name: "cross_entropy"
+    cross_entropy:
+      label_smoothing: 0.1
+
+optim:
+  name: "sgd"
+  weight_decay: 4.e-5
+  no_decay_bn_filter_bias: true
+  sgd:
+    momentum: 0.9
+    nesterov: true
+
+scheduler:
+  name: "cosine"
+  cosine:
+    lr: 0.1
+    warmup_epochs: 5
+    warmup_lr: 0.01
+    min_lr: 1e-5
+    max_epochs: 3 # Reduced for faster testing
+
