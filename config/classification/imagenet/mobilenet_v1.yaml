@@ -10,7 +10,7 @@ dataset:
   root_val: "/home/ubuntu/ml-cvnets/data/imagenet/val"
   name: "imagenet"
   category: "classification"
-  train_batch_size0: 512 # effective batch size is 512 (128 * 4 GPUs)
+  train_batch_size0: 1024 # effective batch size is 512 (128 * 4 GPUs)
   val_batch_size0: 100
   eval_batch_size0: 100
   workers: 4
