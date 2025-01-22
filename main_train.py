@@ -302,7 +302,7 @@ if __name__ == "__main__":
     output_file = f"emissions_{current_date}.csv"
 
     # Initialize the emissions tracker with the custom filename
-    tracker = EmissionsTracker(output_dir="/home/ubuntu/ml-cvnets/results/CodeCarbon",
+    tracker = EmissionsTracker(output_dir="./results/CodeCarbon",
                                 output_file=output_file,
                                 measure_power_secs=15)
 
