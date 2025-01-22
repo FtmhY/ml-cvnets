@@ -5,8 +5,8 @@ common:
   auto_resume: true
   mixed_precision: true
 dataset:
-  root_train: "/home/ubuntu/ml-cvnets/data/imagenet/train_blurred/"
-  root_val: "/home/ubuntu/ml-cvnets/data/imagenet/val_blurred/"
+  root_train: "/home/ubuntu/ml-cvnets-FtmhY/ml-cvnets/data/imagenet/train_blurred/"
+  root_val: "/home/ubuntu/ml-cvnets-FtmhY/ml-cvnets/data/imagenet/val_blurred/"
   name: "imagenet"
   category: "classification"
   train_batch_size0: 64 # In our experiments, we used an effective batch size of 1024 (128 images/GPU * 8 GPUs)
