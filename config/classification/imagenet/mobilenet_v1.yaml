@@ -6,11 +6,11 @@ common:
   mixed_precision: true
   channels_last: true
 dataset:
-  root_train: "/home/ubuntu/ml-cvnets/data/imagenet/train"
-  root_val: "/home/ubuntu/ml-cvnets/data/imagenet/val"
+  root_train: "/home/ubuntu/ml-cvnets/data/imagenet/train_blurred/"
+  root_val: "/home/ubuntu/ml-cvnets/data/imagenet/val_blurred/"
   name: "imagenet"
   category: "classification"
-  train_batch_size0: 1024 # effective batch size is 512 (128 * 4 GPUs)
+  train_batch_size0: 256 # effective batch size is 512 (128 * 4 GPUs)
   val_batch_size0: 100
   eval_batch_size0: 100
   workers: 4
@@ -56,7 +56,7 @@ optim:
 scheduler:
   name: "cosine"
   is_iteration_based: false
-  max_epochs: 2
+  max_epochs: 10
   warmup_iterations: 7500
   warmup_init_lr: 0.05
   cosine:
