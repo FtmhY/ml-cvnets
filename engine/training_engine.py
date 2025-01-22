@@ -31,13 +31,22 @@ from utils.checkpoint_utils import (
 from utils.common_utils import move_to_device, unwrap_model_fn
 from utils.ddp_utils import dist_barrier, is_master
 from utils.tensor_utils import reduce_tensor_sum
+from performance_monitor import PerformanceMonitor
+from codecarbon import EmissionsTracker
+import csv
+from pathlib import Path
+from datetime import datetime
 
-
+PERF_MONITOR = None  # Global variable for PerformanceMonitor
+# Initialize the tracker
+#tracker = EmissionsTracker(output_dir="results/CodeCarbon")
+    
 class Trainer(object):
     """
     This class defines the training and validation code for training models with CVNets
     """
 
+    
     def __init__(
         self,
         opts,
@@ -90,6 +99,14 @@ class Trainer(object):
             opts, "common.mixed_precision_dtype", "float16"
         )
 
+ 
+        # Safely access the exp_loc attribute
+        exp_loc = getattr(opts, "exp_loc", None) or getattr(getattr(opts, "common", None), "exp_loc", "results/run_1")
+        
+        # Initialize CSV logging
+        self.csv_path = self.init_csv_logging(exp_loc)
+
+
         self.train_metric_names = getattr(opts, "stats.train", ["loss"])
         if isinstance(self.train_metric_names, str):
             self.train_metric_names = [self.train_metric_names]
@@ -113,6 +130,7 @@ class Trainer(object):
             self.opts, "common.save_all_checkpoints", False
         )
 
+
         self.save_location = getattr(opts, "common.exp_loc", "results/run_1")
 
         self.log_writers = get_log_writers(self.opts, save_location=self.save_location)
@@ -127,6 +145,7 @@ class Trainer(object):
                     "Batch normalization momentum will be annealed during training."
                 )
                 print(self.adjust_norm_mom)
+
 
         # sample-efficient training
         self.cache_dict = None
@@ -158,12 +177,19 @@ class Trainer(object):
         # recent versions of PyTorch support setting grads to None, for better performance
         # To be explored in Future
         # self.optimizer.zero_grad(set_to_none=True)
+
         self.set_grad_to_none = False
 
         save_interval_freq = getattr(opts, "common.save_interval_freq", 0)
-        # save interval checkpoints every `save_interval_freq` updates on the master node
         self.save_interval = self.is_master_node and save_interval_freq > 0
         self.save_interval_freq = save_interval_freq
+        
+
+        # Variables for early stopping
+        self.early_stopping_patience = getattr(self.opts, "training.early_stopping_patience", 5)
+        self.epochs_without_improvement = 0
+        self.best_val_loss = float("inf")
+
 
     def compute_grad_norm(self):
         parameters = [p for p in self.model.parameters() if p.grad is not None]
@@ -192,7 +218,57 @@ class Trainer(object):
         else:
             self.optimizer.zero_grad()
 
+
+
+    @staticmethod
+    def init_csv_logging(output_dir, filename=None):
+        """Initialize the CSV file for logging metrics."""
+        # Generate the default filename with the current date if not provided
+        if filename is None:
+            current_date = datetime.now().strftime("%Y%m%d")
+            filename = f"training_metrics_{current_date}.csv"
+
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        csv_path = Path(output_dir) / filename
+
+        # Write headers if the file doesn't exist
+        if not csv_path.exists():
+            with open(csv_path, mode="w", newline="") as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow([
+                    "epoch", "iteration", "loss", "learning_rate"
+                ])
+        return csv_path
+
+    # Define the log_metrics_to_csv function
+
+    # Define the log_metrics_to_csv method
+    def log_metrics_to_csv(self, csv_path, **kwargs):
+        try:
+            # Open file in append mode
+            with open(csv_path, 'a', newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=kwargs.keys())
+
+                # Write the header if the file is empty
+                if csvfile.tell() == 0:
+                    writer.writeheader()
+
+                # Write the row of metrics
+                writer.writerow(kwargs)
+                print(f"Metrics logged: {kwargs}")
+        except Exception as e:
+            print(f"Failed to log metrics: {e}")
+
+
+    def log_training_metrics(self, epoch, iteration, loss, lr):
+        self.log_metrics_to_csv(
+            self.csv_path, epoch, iteration, loss, lr
+        )
+
     def train_epoch(self, epoch):
+        global PERF_MONITOR
+        
+
         time.sleep(
             if_test_env(0.5, otherwise=2)
         )  # To prevent possible deadlock during epoch transition
@@ -204,6 +280,9 @@ class Trainer(object):
                     epoch, self.train_loader.samples_in_dataset()
                 )
             )
+
+
+
 
         train_stats = Statistics(
             opts=self.opts,
@@ -231,6 +310,10 @@ class Trainer(object):
             if self.train_iterations > self.max_iterations:
                 self.max_iterations_reached = True
                 return -1, -1
+
+            # Update the PerformanceMonitor with epoch and iteration
+            if PERF_MONITOR:
+                PERF_MONITOR.update_training_info(epoch=epoch, iteration=batch_id)
 
             # move to device
             batch = move_to_device(opts=self.opts, x=batch, device=self.device)
@@ -353,7 +436,16 @@ class Trainer(object):
                 )
 
             batch_load_start = time.time()
-
+            
+            # Log metrics to CSV
+            self.log_metrics_to_csv(
+                self.csv_path,
+                epoch=epoch,
+                iteration=batch_id,
+                loss=loss.item(),
+                lr=self.optimizer.param_groups[0]['lr']
+            )
+        
         avg_loss = train_stats.avg_statistics(
             metric_name="loss", sub_metric_name="total_loss"
         )
@@ -569,10 +661,20 @@ class Trainer(object):
                             )
                         )
 
+
+
     def run(self, train_sampler=None):
+        global PERF_MONITOR
+
+        # Ensure train_sampler is not None
         if train_sampler is None and self.is_master_node:
             logger.error("Train sampler cannot be None")
 
+        # Start the performance monitor
+        PERF_MONITOR.start()
+
+        ## Start tracking
+        #tracker.start()
         copy_at_epoch = getattr(self.opts, "ema.copy_at_epoch", -1)
         train_start_time = time.time()
 
@@ -586,39 +688,76 @@ class Trainer(object):
                 )
             )
 
-        keep_k_best_ckpts = getattr(self.opts, "common.k_best_checkpoints", 5)
+        keep_k_best_ckpts = getattr(self.opts, "common.k_best_checkpoints", 3)
         ema_best_metric = self.best_metric
         is_ema_best = False
+
+        # Variables for early stopping
+        early_stopping_patience = getattr(self.opts, "training.early_stopping_patience", 3)
+        epochs_without_improvement = 0
+        tolerance = 0.05  
+        
+        best_val_loss = float("inf")
 
         try:
             max_epochs = getattr(self.opts, "scheduler.max_epochs", DEFAULT_EPOCHS)
             max_checkpoint_metric = getattr(
                 self.opts, "stats.checkpoint_metric_max", False
             )
+
             for epoch in range(self.start_epoch, max_epochs):
-                # Note that we are using our owm implementations of data samplers
-                # and we have defined this function for both distributed and non-distributed cases
+                # Log the epoch in the monitor
+                if PERF_MONITOR:
+                    PERF_MONITOR.update_training_info(epoch=epoch, iteration=None)
+
+                # Set up training sampler for the epoch
                 train_sampler.set_epoch(epoch)
                 train_sampler.update_scales(
                     epoch=epoch, is_master_node=self.is_master_node
                 )
 
+                # Training phase
                 train_loss, train_ckpt_metric = self.train_epoch(epoch)
 
-                val_loss, val_ckpt_metric = self.val_epoch(
-                    epoch=epoch, model=self.model
-                )
+                # Log iterations during training (handled inside train_epoch)
+                val_loss, val_ckpt_metric = self.val_epoch(epoch=epoch, model=self.model)
+                
+                logger.info("val_loss: {} ".format(val_loss))
+                logger.info("best_val_loss: {} ".format(best_val_loss))                
+                logger.info("Difference: {} ".format(best_val_loss-val_loss))
 
+
+                # Early stopping logic
+                if val_loss >= best_val_loss - tolerance:  # No significant improvement or worsening 
+                    epochs_without_improvement += 1
+                    logger.info("epochs_without_improvement incremented to {}.".format(epochs_without_improvement))
+                else:
+                    epochs_without_improvement = 0
+                    logger.info("Significant improvement detected. epochs_without_improvement reset to 0.")
+
+                if val_loss < best_val_loss:  #  updatin best_val_loss
+                    best_val_loss = val_loss
+                
+                if epochs_without_improvement >= early_stopping_patience:
+                    if self.is_master_node:
+                        logger.info(
+                            "Early stopping triggered after {} epochs without improvement.".format(
+                            early_stopping_patience
+                            )
+                        )
+                    break
+
+
+                # EMA copy and validation
                 if epoch == copy_at_epoch and self.model_ema is not None:
                     if self.is_master_node:
                         logger.log("Copying EMA weights")
-                    # copy model_src weights to model_tgt
                     self.model = copy_weights(
                         model_tgt=self.model, model_src=self.model_ema
                     )
                     if self.is_master_node:
                         logger.log("EMA weights copied")
-                        logger.log("Running validation after Copying EMA model weights")
+                        logger.log("Running validation after copying EMA model weights")
                     self.val_epoch(epoch=epoch, model=self.model)
 
                 if max_checkpoint_metric:
@@ -641,7 +780,7 @@ class Trainer(object):
                         is_ema_best = val_ema_ckpt_metric <= ema_best_metric
                         ema_best_metric = min(val_ema_ckpt_metric, ema_best_metric)
 
-                # sample efficient training
+                # Perform sample-efficient training
                 if (
                     self.sample_efficient_training
                     and (epoch + 1) % self.find_easy_samples_every_k_epoch == 0
@@ -652,9 +791,7 @@ class Trainer(object):
                         if self.model_ema is not None
                         else self.model_ema.ema_model,
                     )
-
-                gc.collect()
-
+                # Save checkpoints
                 if self.is_master_node:
                     save_checkpoint(
                         iterations=self.train_iterations,
@@ -672,73 +809,31 @@ class Trainer(object):
                         k_best_checkpoints=keep_k_best_ckpts,
                         save_all_checkpoints=self.save_all_checkpoints,
                     )
-                    logger.info(
-                        "Checkpoints saved at: {}".format(self.save_location),
-                        print_line=True,
-                    )
-
-                if self.is_master_node:
-                    lr_list = self.scheduler.retrieve_lr(self.optimizer)
-
-                    for log_writer in self.log_writers:
-                        log_metrics(
-                            lrs=lr_list,
-                            log_writer=log_writer,
-                            train_loss=train_loss,
-                            val_loss=val_loss,
-                            epoch=epoch,
-                            best_metric=self.best_metric,
-                            val_ema_loss=val_ema_loss,
-                            ckpt_metric_name=self.ckpt_metric,
-                            train_ckpt_metric=train_ckpt_metric,
-                            val_ckpt_metric=val_ckpt_metric,
-                            val_ema_ckpt_metric=val_ema_ckpt_metric,
-                        )
 
                 if self.max_iterations_reached:
                     if self.use_distributed:
                         dist_barrier()
-
                     if self.is_master_node:
                         logger.info("Max. iterations for training reached")
                     break
-        except KeyboardInterrupt as e:
+        except KeyboardInterrupt:
             if self.is_master_node:
                 logger.log("Keyboard interruption. Exiting from early training")
-                raise e
+            raise
         except Exception as e:
-            if "out of memory" in str(e):
-                logger.log("OOM exception occured")
-                n_gpus = getattr(self.opts, "dev.num_gpus", 1)
-                for dev_id in range(n_gpus):
-                    mem_summary = torch.cuda.memory_summary(
-                        device=torch.device("cuda:{}".format(dev_id)), abbreviated=True
-                    )
-                    logger.log("Memory summary for device id: {}".format(dev_id))
-                    print(mem_summary)
-
-            logger.log(
-                f"Exception occurred that interrupted the training:\n{traceback.format_exc()}"
-            )
-            raise e
+            logger.log(f"Exception occurred:\n{traceback.format_exc()}")
+            raise
         finally:
-            use_distributed = getattr(self.opts, "ddp.use_distributed", False)
-            if use_distributed:
-                torch.distributed.destroy_process_group()
+            # Stop the performance monitor
+            PERF_MONITOR.stop()
+            ## Stop tracking
+            #tracker.stop()
 
+            if self.use_distributed:
+                torch.distributed.destroy_process_group()
             torch.cuda.empty_cache()
 
-            for log_writer in self.log_writers:
-                log_writer.close()
 
-            if self.is_master_node:
-                train_end_time = time.time()
-                hours, rem = divmod(train_end_time - train_start_time, 3600)
-                minutes, seconds = divmod(rem, 60)
-                train_time_str = "{:0>2}:{:0>2}:{:05.2f}".format(
-                    int(hours), int(minutes), seconds
-                )
-                logger.log("Training took {}".format(train_time_str))
 
     def run_loss_landscape(self):
         # Loss landscape code is adapted from https://github.com/xxxnell/how-do-vits-work

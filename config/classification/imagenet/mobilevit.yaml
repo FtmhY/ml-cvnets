@@ -5,11 +5,11 @@ common:
   auto_resume: true
   mixed_precision: true
 dataset:
-  root_train: "/mnt/imagenet/training" # Please update the location of training set
-  root_val: "/mnt/imagenet/validation" # Please update the location of validation set
+  root_train: "/home/ubuntu/ml-cvnets/data/imagenet/train_blurred/"
+  root_val: "/home/ubuntu/ml-cvnets/data/imagenet/val_blurred/"
   name: "imagenet"
   category: "classification"
-  train_batch_size0: 128 # In our experiments, we used an effective batch size of 1024 (128 images/GPU * 8 GPUs)
+  train_batch_size0: 64 # In our experiments, we used an effective batch size of 1024 (128 images/GPU * 8 GPUs)
   val_batch_size0: 100
   eval_batch_size0: 100
   workers: 8
@@ -55,7 +55,7 @@ optim:
 scheduler:
   name: "cosine"
   is_iteration_based: false
-  max_epochs: 300
+  max_epochs: 30
   warmup_iterations: 20000 # longer warm-up
   warmup_init_lr: 0.0002
   cosine:

@@ -6,6 +6,7 @@
 import argparse
 import math
 from typing import List, Optional
+import signal
 
 import torch
 from torch.cuda.amp import GradScaler
@@ -19,7 +20,7 @@ from common import (
 )
 from cvnets import EMA, get_model
 from data import create_train_val_loader
-from engine import Trainer
+#from engine import Trainer
 from loss_fn import build_loss_fn
 from optim import build_optimizer
 from optim.scheduler import build_scheduler
@@ -28,21 +29,16 @@ from utils import logger, resources
 from utils.checkpoint_utils import load_checkpoint, load_model_state
 from utils.common_utils import create_directories, device_setup
 from utils.ddp_utils import distributed_init, is_master
-
+from performance_monitor import PerformanceMonitor
+from engine.training_engine import Trainer,PERF_MONITOR
+from engine import training_engine
 from codecarbon import EmissionsTracker
 from datetime import datetime
 
-# Get the current date in YYYYMMDD format
-current_date = datetime.now().strftime("%Y%m%d")
-
-# Specify the custom filename
-custom_file_name = f"emissions_{current_date}.csv"
-
-# Initialize the tracker with the custom filename
-tracker = EmissionsTracker(output_dir="./results/CodeCarbon", output_file=custom_file_name, measure_power_secs=15)
-
-# Start tracking
-tracker.start()
+# Initialize the tracker
+#tracker = EmissionsTracker(output_dir="results/CodeCarbon")
+#tracker = EmissionsTracker(output_dir='/home/ubuntu/ml-cvnets/results/CodeCarbon',debug=True)
+#tracker = EmissionsTracker(output_dir="results/CodeCarbon")
 
 @errors.record
 def main(opts: argparse.Namespace, **kwargs) -> None:
@@ -187,8 +183,6 @@ def main(opts: argparse.Namespace, **kwargs) -> None:
 
     training_engine.run(train_sampler=train_sampler)
 
-# Stop tracking
-tracker.stop()
 
 def distributed_worker(i, main, opts, kwargs):
     setattr(opts, "dev.device_id", i)
@@ -206,6 +200,16 @@ def distributed_worker(i, main, opts, kwargs):
 
 
 def main_worker(args: Optional[List[str]] = None, **kwargs):
+    ## Initialize the PerformanceMonitor instance
+    #PERF_MONITOR = PerformanceMonitor(interval=15)
+
+    # Initialize PerformanceMonitor
+    perf_monitor = PerformanceMonitor(interval=15)
+
+    # Assign it to the global variable in training_engine
+    training_engine.PERF_MONITOR = perf_monitor
+
+    
     opts = get_training_arguments(args=args)
     print(opts)
     # device set-up
@@ -281,5 +285,45 @@ def main_worker(args: Optional[List[str]] = None, **kwargs):
         )
 
 
+def handle_interrupt(signum, frame):
+    print("Interrupt received. Stopping emissions tracking...")
+    tracker.stop()
+    print("Emissions tracking stopped.")
+    exit(0)
+
+
 if __name__ == "__main__":
-    main_worker()
+    # Initialize the emissions tracker
+    #tracker = EmissionsTracker(output_dir="/home/ubuntu/ml-cvnets/results/CodeCarbon", measure_power_secs=15)
+
+
+    # Generate the filename with the desired format
+    current_date = datetime.now().strftime("%Y%m%d")
+    output_file = f"emissions_{current_date}.csv"
+
+    # Initialize the emissions tracker with the custom filename
+    tracker = EmissionsTracker(output_dir="/home/ubuntu/ml-cvnets/results/CodeCarbon",
+                                output_file=output_file,
+                                measure_power_secs=15)
+
+
+    # Register the signal handler for keyboard interrupts
+    signal.signal(signal.SIGINT, handle_interrupt)
+
+    try:
+        # Start tracking
+        tracker.start()
+        print("Emissions tracking started...")
+
+        # Run the main worker function
+        main_worker()
+
+    except Exception as e:
+        print(f"CodeCarbon failed with exception: {e}")
+
+    finally:
+        # Ensure tracking is stopped
+        print("Stopping emissions tracking in finally block...")
+        tracker.stop()
+        print("Emissions tracking stopped.")
+
