@@ -292,6 +292,10 @@ class Trainer(object):
             log_writers=self.log_writers,
         )
 
+        # Clear the memory cache to prevent CUDA memory fragments.        
+        torch.cuda.empty_cache()
+                                        
+
         self.model.train()
         # criteria is also a nn.Module and we may need access to training property in some
         # loss functions. So, to enable, that, we set criteria to train/eval mode
@@ -307,13 +311,14 @@ class Trainer(object):
         batch_load_start = time.time()
         grad_norm = torch.tensor([0.0], dtype=torch.float, device=self.device)
         for batch_id, batch in enumerate(self.train_loader):
+            
             if self.train_iterations > self.max_iterations:
                 self.max_iterations_reached = True
                 return -1, -1
 
             # Update the PerformanceMonitor with epoch and iteration
-            if PERF_MONITOR:
-                PERF_MONITOR.update_training_info(epoch=epoch, iteration=batch_id)
+            ####if PERF_MONITOR:
+                ####PERF_MONITOR.update_training_info(epoch=epoch, iteration=batch_id)
 
             # move to device
             batch = move_to_device(opts=self.opts, x=batch, device=self.device)
@@ -445,7 +450,10 @@ class Trainer(object):
                 loss=loss.item(),
                 lr=self.optimizer.param_groups[0]['lr']
             )
-        
+            # Log batch size for each rank       
+            logger.log(
+                f"Training phase: Rank {torch.distributed.get_rank()} - Batch ID: {batch_id} - Batch size: {batch_size}"
+            )
         avg_loss = train_stats.avg_statistics(
             metric_name="loss", sub_metric_name="total_loss"
         )
@@ -494,6 +502,12 @@ class Trainer(object):
             processed_samples = 0
             lr = self.scheduler.retrieve_lr(self.optimizer)
             for batch_id, batch in enumerate(self.val_loader):
+
+                # Log batch ID, rank, and batch size
+                logger.log(
+                    f"Validation phase: Rank {torch.distributed.get_rank()} - Batch ID: {batch_id} - Batch size: {len(batch['samples'])}"
+                )
+
                 batch = move_to_device(opts=self.opts, x=batch, device=self.device)
 
                 samples, targets = batch["samples"], batch["targets"]
@@ -664,14 +678,14 @@ class Trainer(object):
 
 
     def run(self, train_sampler=None):
-        global PERF_MONITOR
+        ####global PERF_MONITOR
 
         # Ensure train_sampler is not None
         if train_sampler is None and self.is_master_node:
             logger.error("Train sampler cannot be None")
 
         # Start the performance monitor
-        PERF_MONITOR.start()
+        ####PERF_MONITOR.start()
 
         ## Start tracking
         #tracker.start()
@@ -695,7 +709,7 @@ class Trainer(object):
         # Variables for early stopping
         early_stopping_patience = getattr(self.opts, "training.early_stopping_patience", 3)
         epochs_without_improvement = 0
-        tolerance = 0.05  
+        tolerance = 0  
         
         best_val_loss = float("inf")
 
@@ -707,15 +721,17 @@ class Trainer(object):
 
             for epoch in range(self.start_epoch, max_epochs):
                 # Log the epoch in the monitor
-                if PERF_MONITOR:
-                    PERF_MONITOR.update_training_info(epoch=epoch, iteration=None)
+                ####if PERF_MONITOR:
+                    ####PERF_MONITOR.update_training_info(epoch=epoch, iteration=None)
 
                 # Set up training sampler for the epoch
                 train_sampler.set_epoch(epoch)
                 train_sampler.update_scales(
                     epoch=epoch, is_master_node=self.is_master_node
                 )
-
+                # Clear the memory cache to prevent CUDA memory fragments.
+                torch.cuda.empty_cache()
+                
                 # Training phase
                 train_loss, train_ckpt_metric = self.train_epoch(epoch)
 
@@ -825,7 +841,7 @@ class Trainer(object):
             raise
         finally:
             # Stop the performance monitor
-            PERF_MONITOR.stop()
+            ####PERF_MONITOR.stop()
             ## Stop tracking
             #tracker.stop()
 

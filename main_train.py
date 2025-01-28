@@ -248,7 +248,13 @@ def main_worker(args: Optional[List[str]] = None, **kwargs):
 
         # adjust the batch size
         train_bsize = getattr(opts, "dataset.train_batch_size0") * max(1, num_gpus)
+        
+        logger.log("Training batch size measurement: {}".format(train_bsize))
+        
         val_bsize = getattr(opts, "dataset.val_batch_size0") * max(1, num_gpus)
+        
+        logger.log("Validation batch size measurement: {}".format(val_bsize))
+        
         setattr(opts, "dataset.train_batch_size0", train_bsize)
         setattr(opts, "dataset.val_batch_size0", val_bsize)
         setattr(opts, "dev.device_id", None)
