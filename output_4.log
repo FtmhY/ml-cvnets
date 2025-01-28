@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/home/ubuntu/ml-cvnets/main_train.py", line 34, in <module>
-    custom_file_name = f"emissions_{current_date}.csv"
-NameError: name 'current_date' is not defined
