@@ -1,113 +1,98 @@
-import threading
+
+import subprocess
 import time
-import psutil
 import csv
+import psutil
 from datetime import datetime
 from pathlib import Path
-from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates, nvmlDeviceGetMemoryInfo, nvmlShutdown
 
 class PerformanceMonitor:
-    def __init__(self, interval=15, log_dir="/home/ubuntu/ml-cvnets/results/PerformanceLogs/"):
+    def __init__(self, interval=15, log_dir="/home/ubuntu/ml-cvnets-FtmhY/ml-cvnets/results/PerformanceLogs/"):
         self.interval = interval
         self.running = False
-        self.metrics = []
-        self.epoch = None  # Stores the current epoch
-        self.iteration = None  # Stores the current iteration
+        self.epoch = None
+        self.iteration = None
 
-        # Generate log file name based on the current date
-        date_str = datetime.now().strftime("%Y%m%d")
-        self.log_file = Path(log_dir) / f"perf_monitor_log_{date_str}.csv"
-        self.log_file.parent.mkdir(parents=True, exist_ok=True)
+        # Log file paths
+        date_str = datetime.now().strftime('%Y%m%d')
+        self.gpu_log_file = Path(log_dir) / f"perf_monitor_gpu_{date_str}.csv"
+        self.sys_log_file = Path(log_dir) / f"perf_monitor_sys_{date_str}.csv"
 
-        # Initialize the CSV file with headers
-        with open(self.log_file, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "timestamp",
-                "epoch",
-                "iteration",
-                "cpu_percent",
-                "memory_percent",
-                "gpu_utilization",
-                "gpu_memory_used_MB",
-                "disk_read_MB",
-                "disk_write_MB",
-                "net_sent_MB",
-                "net_recv_MB"
-            ])
+        # Ensure the log directory exists
+        self.gpu_log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Initialize GPU log file
+        if not self.gpu_log_file.exists():
+            with open(self.gpu_log_file, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["timestamp", "epoch", "iteration", "gpu_id", "gpu_utilization", "gpu_memory_used_MB"])
+
+        # Initialize system log file
+        if not self.sys_log_file.exists():
+            with open(self.sys_log_file, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["timestamp", "epoch", "iteration", "cpu_percent", "memory_percent"])
 
     def update_training_info(self, epoch, iteration):
-        """
-        Update the current epoch and iteration for logging.
-        """
+        """Update the current epoch and iteration for logging."""
         self.epoch = epoch
         self.iteration = iteration
-
+        print(f"Updated epoch: {self.epoch}, iteration: {self.iteration}")  # Debugging
+        
     def collect_metrics(self):
-        # Initialize NVML for GPU monitoring
-        nvmlInit()
-        gpu_handle = nvmlDeviceGetHandleByIndex(0)
-
         while self.running:
-            # CPU and memory stats
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # GPU Monitoring using nvidia-smi
+            try:
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used",
+                     "--format=csv,noheader,nounits"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
+                gpu_stats = result.stdout.strip().split("\n")
+
+                with open(self.gpu_log_file, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    for line in gpu_stats:
+                        gpu_id, utilization, memory_used = line.split(", ")
+                        writer.writerow([
+                            timestamp,
+                            self.epoch if self.epoch is not None else "N/A",
+                            self.iteration if self.iteration is not None else "N/A", 
+                            gpu_id, 
+                            utilization, 
+                            memory_used
+                        ])
+
+            except subprocess.CalledProcessError as e:
+                print(f"Error running nvidia-smi: {e}")
+
+            # CPU & Memory Monitoring
             cpu_percent = psutil.cpu_percent(interval=None)
             memory_info = psutil.virtual_memory()
 
-            # GPU utilization and memory
-            utilization = nvmlDeviceGetUtilizationRates(gpu_handle)
-            gpu_memory = nvmlDeviceGetMemoryInfo(gpu_handle)
-
-            # Disk I/O
-            disk_io = psutil.disk_io_counters()
-
-            # Network I/O
-            net_io = psutil.net_io_counters()
-
-            # Collect metrics
-            metric = {
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "epoch": self.epoch if self.epoch is not None else "N/A",
-                "iteration": self.iteration if self.iteration is not None else "N/A",
-                "cpu_percent": cpu_percent,
-                "memory_percent": memory_info.percent,
-                "gpu_utilization": utilization.gpu,
-                "gpu_memory_used_MB": gpu_memory.used / 1024**2,
-                "disk_read_MB": disk_io.read_bytes / 1024**2,
-                "disk_write_MB": disk_io.write_bytes / 1024**2,
-                "net_sent_MB": net_io.bytes_sent / 1024**2,
-                "net_recv_MB": net_io.bytes_recv / 1024**2,
-            }
-            self.metrics.append(metric)
-
-            # Write metrics to the CSV file
-            with open(self.log_file, "a", newline="") as f:
+            with open(self.sys_log_file, "a", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(metric.values())
+                writer.writerow([
+                    timestamp,
+                    self.epoch if self.epoch is not None else "N/A",
+                    self.iteration if self.iteration is not None else "N/A",
+                    cpu_percent,
+                    memory_info.percent
+                ])
 
-            # Wait for the specified interval before collecting metrics again
             time.sleep(self.interval)
 
-        nvmlShutdown()
-
     def start(self):
-        """
-        Start the performance monitoring thread.
-        """
+        """Start performance monitoring."""
         self.running = True
-        self.thread = threading.Thread(target=self.collect_metrics)
-        self.thread.start()
+        self.collect_metrics()  # Run in the same thread for simplicity
 
     def stop(self):
-        """
-        Stop the performance monitoring thread.
-        """
+        """Stop performance monitoring."""
         self.running = False
-        self.thread.join()
-
-    def get_metrics(self):
-        """
-        Retrieve the collected metrics.
-        """
-        return self.metrics
-
 

@@ -32,10 +32,14 @@ from utils.common_utils import move_to_device, unwrap_model_fn
 from utils.ddp_utils import dist_barrier, is_master
 from utils.tensor_utils import reduce_tensor_sum
 from performance_monitor import PerformanceMonitor
+import os
+import torch.distributed as dist
+
 from codecarbon import EmissionsTracker
 import csv
 from pathlib import Path
 from datetime import datetime
+
 
 PERF_MONITOR = None  # Global variable for PerformanceMonitor
 # Initialize the tracker
@@ -282,8 +286,6 @@ class Trainer(object):
             )
 
 
-
-
         train_stats = Statistics(
             opts=self.opts,
             metric_names=self.train_metric_names,
@@ -317,9 +319,10 @@ class Trainer(object):
                 return -1, -1
 
             # Update the PerformanceMonitor with epoch and iteration
-            ####if PERF_MONITOR:
-                ####PERF_MONITOR.update_training_info(epoch=epoch, iteration=batch_id)
+            if PERF_MONITOR:
+                PERF_MONITOR.update_training_info(epoch=epoch, iteration=batch_id)
 
+            
             # move to device
             batch = move_to_device(opts=self.opts, x=batch, device=self.device)
             # apply mix-up transforms if any
@@ -450,10 +453,10 @@ class Trainer(object):
                 loss=loss.item(),
                 lr=self.optimizer.param_groups[0]['lr']
             )
-            # Log batch size for each rank       
-            logger.log(
-                f"Training phase: Rank {torch.distributed.get_rank()} - Batch ID: {batch_id} - Batch size: {batch_size}"
-            )
+            # # Log batch size for each rank       
+            # logger.log(
+            #     f"Training phase: Rank {torch.distributed.get_rank()} - Batch ID: {batch_id} - Batch size: {batch_size}"
+            # )
         avg_loss = train_stats.avg_statistics(
             metric_name="loss", sub_metric_name="total_loss"
         )
@@ -503,10 +506,10 @@ class Trainer(object):
             lr = self.scheduler.retrieve_lr(self.optimizer)
             for batch_id, batch in enumerate(self.val_loader):
 
-                # Log batch ID, rank, and batch size
-                logger.log(
-                    f"Validation phase: Rank {torch.distributed.get_rank()} - Batch ID: {batch_id} - Batch size: {len(batch['samples'])}"
-                )
+                # # Log batch ID, rank, and batch size
+                # logger.log(
+                #     f"Validation phase: Rank {torch.distributed.get_rank()} - Batch ID: {batch_id} - Batch size: {len(batch['samples'])}"
+                # )
 
                 batch = move_to_device(opts=self.opts, x=batch, device=self.device)
 
@@ -678,14 +681,22 @@ class Trainer(object):
 
 
     def run(self, train_sampler=None):
-        ####global PERF_MONITOR
+        global PERF_MONITOR
 
-        # Ensure train_sampler is not None
-        if train_sampler is None and self.is_master_node:
-            logger.error("Train sampler cannot be None")
 
-        # Start the performance monitor
-        ####PERF_MONITOR.start()
+        if is_master(self.opts):
+            # Initialize a PerformanceMonitor instance for each process
+            PERF_MONITOR = PerformanceMonitor(interval=15)
+            PERF_MONITOR.start()
+
+
+        # if dist.is_initialized():  # Ensure DDP is active
+        #     gpu_id = int(os.environ.get("LOCAL_RANK", 0))  # Get local GPU index
+        # else:
+        #     gpu_id = 0  # Default to GPU 0 if not using DDP
+
+        # PERF_MONITOR = PerformanceMonitor(interval=15, gpu_id=gpu_id)
+        # PERF_MONITOR.start()
 
         ## Start tracking
         #tracker.start()
@@ -720,9 +731,10 @@ class Trainer(object):
             )
 
             for epoch in range(self.start_epoch, max_epochs):
+                logger.info("starting epoch: {} ".format(epoch))
                 # Log the epoch in the monitor
-                ####if PERF_MONITOR:
-                    ####PERF_MONITOR.update_training_info(epoch=epoch, iteration=None)
+                if PERF_MONITOR:
+                    PERF_MONITOR.update_training_info(epoch=epoch, iteration=None)
 
                 # Set up training sampler for the epoch
                 train_sampler.set_epoch(epoch)
@@ -841,7 +853,7 @@ class Trainer(object):
             raise
         finally:
             # Stop the performance monitor
-            ####PERF_MONITOR.stop()
+            PERF_MONITOR.stop()
             ## Stop tracking
             #tracker.stop()
 
@@ -1043,3 +1055,4 @@ class Trainer(object):
                     int(hours), int(minutes), seconds
                 )
                 logger.log("Loss landspace evaluation took {}".format(train_time_str))
+
